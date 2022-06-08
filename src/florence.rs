@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum HttpMethod {
     GET,
     HEAD,
@@ -19,8 +19,8 @@ type RouteHandler = fn(req: &dyn FlorenceRequest, res: &mut dyn FlorenceResponse
 
 pub trait FlorenceResponse {
     fn set_status(&mut self, code: u32);
-    fn set_body(&self, content: String);
-    fn send(&self);
+    fn set_body(&mut self, content: String);
+    fn send(&mut self);
 }
 
 pub trait FlorenceRequest {
@@ -58,7 +58,7 @@ impl Router for Florence {
 
 impl Server for Florence {
     fn handle_connection(&self, stream: &mut TcpStream) {
-        let uri = "/".to_string();
+        //let uri = "/".to_string();
 
         // read stream
         let mut buffer = [0; 1024*12]; // 8k (apache max header size) + 4k start line
@@ -70,19 +70,27 @@ impl Server for Florence {
 
         let parse_result= parse_request(http_request.to_string());
         let request = parse_result.unwrap();
-        let mut response = Response::new();
+        let mut response = Response::new(stream);
 
         println!("request: {:?}", request);
 
-        let content = "Hello World\n".to_string();
-        let http_response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}", content.len(), content);
-        stream.write(http_response.as_bytes()).unwrap();
-        stream.flush().unwrap();
-
         for route in self.routes.iter() {
-            (route.handler)(&request, &mut response);
+            let route_match = match_route(&request, route);
+            match route_match {
+                Some(_x) => {
+                    (route.handler)(&request, &mut response);
+                    return
+                },
+                _ => {}
+            }
         }
 
+        // default to 404
+        let content = "Not found".to_string();
+        let status_string = "404 Not Found";
+        let http_response = format!("HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n{}", status_string, content.len(), content);
+        stream.write(http_response.as_bytes()).unwrap();
+        stream.flush().unwrap();
     }
 
     fn start(self, port: u32) -> Result<(), String> {
@@ -134,31 +142,38 @@ impl Request {
     }
 }
 
-pub struct Response {
-    status_code: u32
+pub struct Response<'a> {
+    body: String,
+    status_code: u32,
+    stream: &'a mut TcpStream,
 }
 
-impl FlorenceResponse for Response {
+impl FlorenceResponse for Response<'_> {
     fn set_status(&mut self, code: u32) {
         self.status_code = code;
     }
 
-    fn set_body(&self, content: String) {
-        println!("set body todo")
+    fn set_body(&mut self, body: String) {
+        self.body = body;
     }
 
-    fn send(&self) {
-        println!("set body send")
+    fn send(&mut self) {
+        let status_string = "200 Ok";
+        let http_response = format!("HTTP/1.1 {}\r\nContent-Length: {}\r\n\r\n{}", status_string, self.body.len(), self.body);
+        self.stream.write(http_response.as_bytes()).unwrap();
+        self.stream.flush().unwrap();
+
+        println!("sent")
     }
 }
 
-impl Response {
-    fn new() -> Response {
-        Response { status_code: 200 }
+impl Response<'_> {
+    fn new(stream: &mut TcpStream) -> Response {
+        Response { body: "".to_string(), status_code: 200, stream }
     }
 }
 
-
+#[derive(Clone)]
 pub struct Route {
     handler: RouteHandler,
     method: HttpMethod,
@@ -175,6 +190,7 @@ impl Route {
     }
 }
 
+#[derive(Clone)]
 struct RouteMatch {
     params: HashMap<String,String>,
     route: Route,
@@ -195,7 +211,7 @@ struct StartLine {
     version: String,
 }
 
-fn match_route(request: Request, route: Route) -> Option<RouteMatch> {
+fn match_route(request: &Request, route: &Route) -> Option<RouteMatch> {
     // todo
     // split request.uri and route.uri by /
     // string compare vec entries, watch for * wildcard and :parameter placeholders
@@ -203,7 +219,10 @@ fn match_route(request: Request, route: Route) -> Option<RouteMatch> {
     // /foo/:id -> matches /foo/3 but not /foo or /foo/
     // /foo/*/bar -> matches /foo/anything/bar
     // /foo/*blah -> matches (literally) /foo/*blah, no wildcard
-    return Some(RouteMatch::new(route, HashMap::new()));
+    if request.uri == route.uri {
+        return Some(RouteMatch::new(route.clone(), HashMap::new()));
+    }
+    return None
 }
 
 fn parse_start_line(start_line: String) -> Result<StartLine, String> {
