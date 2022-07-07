@@ -2,11 +2,11 @@
 #![feature(iter_intersperse)]
 extern crate core;
 
-use crate::florence::{Florence, FlorenceRequest, FlorenceResponse, Router, Server};
+use crate::lib::{Florence, FlorenceRequest, FlorenceResponse, Router, Server};
 
-mod florence;
-mod router_tests;
-mod mock_tcp_stream;
+
+mod lib;
+
 
 fn main() {
     let mut f = Florence::new();
@@ -14,14 +14,12 @@ fn main() {
         println!("serving /");
         res.set_status(200);
         res.set_body("Hello /!".to_string());
-        res.send();
     });
 
     f.get("/foo".to_string(), |_req: &dyn FlorenceRequest, res: &mut dyn FlorenceResponse|{
         println!("serving /foo");
         res.set_status(200);
         res.set_body("Hello Foo".to_string());
-        res.send();
     });
 
     let result = f.start(3030);
